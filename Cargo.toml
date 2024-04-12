@@ -4,4 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sdl2 = "0.36.0"
+
+[dependencies.sdl2]
+features = ["ttf"]
+version = "0.36.0"

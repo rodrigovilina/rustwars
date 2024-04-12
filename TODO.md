@@ -1,9 +1,5 @@
 # TODO
 
-- Add a first unit
-- Add a second unit
-- Add the notion of player and differentiate the units
-- Add the idea of turns and a mechanism to finish a turn
 - Add a cursor
 - Move the cursor from one tile to another
 - Add and display Unit HP
