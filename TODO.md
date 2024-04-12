@@ -1,7 +1,5 @@
 # TODO
 
-- Draw a single map tile (grass)
-- Draw a second tile
 - Add a first unit
 - Add a second unit
 - Add the notion of player and differentiate the units
