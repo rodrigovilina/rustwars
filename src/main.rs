@@ -6,126 +6,194 @@
 #![warn(clippy::perf)]
 #![warn(clippy::unwrap_used)]
 
-mod tile;
-mod unit;
+mod back;
+mod cursor;
+mod front;
 mod team;
+mod tile;
+mod turn;
+mod unit;
 
 use {
-  sdl2::{
-    event::Event, keyboard::Keycode, pixels::Color, rect::Rect,
-  }, ::std::thread::sleep, std::{path::Path, time::Duration}, team::Team, tile::Tile, unit::Unit
+  ::std::thread::sleep,
+  back::Backend,
+  cursor::Cursor,
+  front::Frontend,
+  sdl2::{event::Event, keyboard::Keycode, pixels::Color, rect::Rect, ttf::Font},
+  std::{path::Path, time::Duration},
+  unit::View,
 };
 
+#[macro_export]
 macro_rules! rect(
   ($x:expr, $y:expr, $w:expr, $h:expr) => (
     Rect::new($x as i32, $y as i32, $w as u32, $h as u32)
   )
 );
 
+pub const TILE_SIZE: usize = 64;
+pub const TILE_AND_GAP: usize = 65;
+pub const UNIT_SIZE: usize = 48;
+
 fn main() -> Result<(), String> {
-  let sdl_context = sdl2::init()?;
-  let video_subsystem = sdl_context.video()?;
-  let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string())?;
+  Game::main()
+}
 
-  let window = video_subsystem
-    .window("rust-sdl2 demo: Video", 800, 600)
-    .position_centered()
-    .opengl()
-    .build()
-    .map_err(|e| e.to_string())?;
+pub struct Game {
+  front: Frontend,
+  back: Backend,
+}
 
-  let mut canvas = window.into_canvas().build().map_err(|e| e.to_string())?;
-  let texture_creator = canvas.texture_creator();
-  let font_path = Path::new("./font.ttf");
-  let font = ttf_context.load_font(font_path, 128)?;
+impl Game {
+  fn main() -> Result<(), String> {
+    Self::new()?.run()
+  }
 
-  canvas.set_draw_color(Color::RGB(20, 20, 20));
-  canvas.clear();
-  canvas.present();
-  let mut event_pump = sdl_context.event_pump()?;
-  let mut turn = Turn { team: Team::Red };
-  let mut frame: u128 = 0;
-  let mut change_turn: bool;
+  fn new() -> Result<Self, String> {
+    let back = Backend::new();
+    let front = Frontend::new()?;
 
-  loop {
-    change_turn = false;
+    Ok(Self { front, back })
+  }
 
-    for event in event_pump.poll_iter() {
-      match event {
-        Event::Quit { .. }
-        | Event::KeyDown {
-          keycode: Some(Keycode::Escape),
-          ..
-        } => return Ok(()),
-        Event::KeyDown {
-          keycode: Some(Keycode::T),
-          ..
-        } => { change_turn = true },
-        _ => {}
-      }
-    }
-
-    canvas.set_draw_color(Color::RGB(20, 20, 20));
-    canvas.clear();
-
-    let is_red_turn: bool = turn.team == Team::Red;
-    let is_blue_turn: bool = turn.team == Team::Blue;
-
-    // Draw Tile
-    Tile { x: 0 }.draw(&mut canvas);
-    Tile { x: 1 }.draw(&mut canvas);
-    Unit {
+  fn run(&mut self) -> Result<(), String> {
+    let mut cursor = Cursor {
+      min_x: 0,
+      min_y: 0,
+      max_x: 2,
+      max_y: 2,
       x: 0,
-      team: Team::Red,
-    }
-    .draw(&mut canvas, is_red_turn);
-    Unit {
-      x: 1,
-      team: Team::Blue,
-    }
-    .draw(&mut canvas, is_blue_turn);
+      y: 0,
+    };
 
-    canvas.set_draw_color(turn.team.light_color());
-    let _ = canvas.fill_rect(Rect::new(0, 590, 800, 10));
+    self.front.clear_and_present_black();
 
-    // Draw text
+    let mut change_turn: bool;
+
+    loop {
+      change_turn = false;
+
+      for event in self.front.event_pump.poll_iter() {
+        match event {
+          Event::Quit { .. }
+          | Event::KeyDown {
+            keycode: Some(Keycode::Escape),
+            ..
+          } => return Ok(()),
+          Event::KeyDown {
+            keycode: Some(Keycode::T),
+            ..
+          } => change_turn = true,
+          Event::KeyDown {
+            keycode: Some(Keycode::J),
+            ..
+          } => cursor.left(),
+          Event::KeyDown {
+            keycode: Some(Keycode::K),
+            ..
+          } => cursor.down(),
+          Event::KeyDown {
+            keycode: Some(Keycode::I),
+            ..
+          } => cursor.up(),
+          Event::KeyDown {
+            keycode: Some(Keycode::L),
+            ..
+          } => cursor.right(),
+          _ => {}
+        }
+      }
+
+      self.clear_black();
+      self.draw_tiles();
+      self.draw_units();
+      self.draw_cursor(&cursor);
+      self.draw_turn_bar();
+      self.draw_text(&cursor)?;
+      self.present();
+      self.end_turn(change_turn);
+      self.increase_frame_count();
+      sleep(Duration::from_millis(50));
+    }
+  }
+
+  fn end_turn(&mut self, change_turn: bool) {
+    if change_turn {
+        self.back.turn = self.back.turn.next();
+      }
+  }
+
+  fn increase_frame_count(&mut self) {
+    self.front.frame += 1;
+  }
+
+  fn present(&mut self) {
+    self.front.canvas.present();
+  }
+
+  fn clear_black(&mut self) {
+    self.front.canvas.set_draw_color(Color::RGB(20, 20, 20));
+    self.front.canvas.clear();
+  }
+
+  fn draw_text(&mut self, cursor: &Cursor) -> Result<(), String> {
+    let font_path = Path::new("./font.ttf");
+    let font: Font<'_, '_> = self.front.ttf_context.load_font(font_path, 32)?;
     let surface = font
-      .render(&format!("Hello Rust! frame: {frame}, Current turn: {:?}", turn.team))
+      .render(&format!(
+        "Hello Rust! frame: {}, Current turn: {:?}",
+        self.front.frame, self.back.turn.team
+      ))
       .blended(Color::RGBA(255, 0, 0, 255))
       .map_err(|e| e.to_string())?;
-    let texture = texture_creator
+    let texture = self
+      .front
+      .texture_creator
       .create_texture_from_surface(&surface)
       .map_err(|e| e.to_string())?;
+    let target = rect!(0, 80, 800, 80);
+    self.front.canvas.copy(&texture, None, Some(target))?;
+    let surface = font
+      .render(&format!("Cursor: {cursor:?}",))
+      .blended(Color::RGBA(255, 0, 0, 255))
+      .map_err(|e| e.to_string())?;
+    let texture = self
+      .front
+      .texture_creator
+      .create_texture_from_surface(&surface)
+      .map_err(|e| e.to_string())?;
+    let target = rect!(0, 160, 800, 80);
+    self.front.canvas.copy(&texture, None, Some(target))?;
+    Ok(())
+  }
 
-    let target = rect!(80, 80, 400, 50);
-    canvas.copy(&texture, None, Some(target))?;
-    // End draw text
+  fn draw_cursor(&mut self, cursor: &Cursor) {
+    cursor.draw(&mut self.front.canvas);
+  }
 
-    canvas.present();
+  fn draw_units(&mut self) {
+    self.back.units.iter().for_each(|unit| {
+      let active: bool = unit.team == self.back.turn.team;
+      let unit_view: View = if active {
+        View::Active(unit.clone())
+      } else {
+        View::Inactive(unit.clone())
+      };
+      unit_view.draw(&mut self.front.canvas);
+    });
+  }
 
-    if change_turn {
-      turn = turn.next();
-    }
+  fn draw_tiles(&mut self) {
+    self.back.tiles.iter().for_each(|tile| {
+      tile.draw(&mut self.front.canvas);
+    });
+  }
 
-    frame += 1;
-    sleep(Duration::from_millis(50));
+  fn draw_turn_bar(&mut self) {
+    self
+      .front
+      .canvas
+      .set_draw_color(self.back.turn.team.light_color());
+    let _ = self.front.canvas.fill_rect(Rect::new(0, 590, 800, 10));
   }
 }
-
-pub const TILE_SIZE: u32 = 64;
-pub const UNIT_SIZE: u32 = 48;
-
-#[derive(Debug)]
-struct Turn {
-  team: Team,
-}
-
-impl Turn {
-  const fn next(&self) -> Self {
-    match self.team {
-      Team::Red => Self { team: Team::Blue },
-      Team::Blue => Self { team: Team::Red },
-    }
-  }
-}
-
